@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy.exc import SQLAlchemyError
 import os
 
 app = Flask(__name__)
@@ -14,6 +15,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'li
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your-secret-key-change-in-production'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+
+MAX_BORROW_LIMIT = 5
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -265,79 +268,152 @@ def borrow_book():
     if not book_id:
         return jsonify({'message': '请选择要借阅的图书'}), 400
 
-    book = Book.query.get_or_404(book_id)
+    current_user = User.query.get(current_user_id)
+    if not current_user:
+        return jsonify({'message': '用户不存在，请重新登录'}), 401
 
-    if book.available_copies <= 0:
-        return jsonify({'message': '该图书暂无可用副本'}), 400
+    try:
+        current_borrow_count = BorrowRecord.query.filter_by(
+            user_id=current_user_id,
+            status='borrowed'
+        ).count()
 
-    existing_borrow = BorrowRecord.query.filter_by(
-        user_id=current_user_id,
-        book_id=book_id,
-        status='borrowed'
-    ).first()
+        if current_borrow_count >= MAX_BORROW_LIMIT:
+            return jsonify({
+                'message': f'您已借阅 {current_borrow_count} 本图书，已达到最大借阅限制 {MAX_BORROW_LIMIT} 本'
+            }), 400
 
-    if existing_borrow:
-        return jsonify({'message': '您已借阅过该书，且尚未归还'}), 400
+        book = Book.query.get_or_404(book_id)
 
-    borrow_record = BorrowRecord(
-        user_id=current_user_id,
-        book_id=book_id
-    )
+        if book.available_copies <= 0:
+            return jsonify({'message': '该图书暂无可用副本'}), 400
 
-    book.available_copies -= 1
+        existing_borrow = BorrowRecord.query.filter_by(
+            user_id=current_user_id,
+            book_id=book_id,
+            status='borrowed'
+        ).first()
 
-    db.session.add(borrow_record)
-    db.session.commit()
+        if existing_borrow:
+            return jsonify({'message': '您已借阅过该书，且尚未归还'}), 400
 
-    return jsonify({'message': '借阅成功', 'borrow_record': borrow_record.to_dict()}), 201
+        borrow_record = BorrowRecord(
+            user_id=current_user_id,
+            book_id=book_id
+        )
+
+        book.available_copies -= 1
+
+        db.session.add(borrow_record)
+        db.session.commit()
+
+        return jsonify({
+            'message': '借阅成功',
+            'borrow_record': borrow_record.to_dict(),
+            'current_borrow_count': current_borrow_count + 1,
+            'max_limit': MAX_BORROW_LIMIT
+        }), 201
+
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f'借阅数据库错误: {str(e)}')
+        return jsonify({'message': '借阅失败，请稍后重试'}), 500
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'借阅未知错误: {str(e)}')
+        return jsonify({'message': '借阅失败，请稍后重试'}), 500
 
 
 @app.route('/api/return/<int:record_id>', methods=['POST'])
 @jwt_required()
 def return_book(record_id):
     current_user_id = get_jwt_identity()
+
     current_user = User.query.get(current_user_id)
+    if not current_user:
+        return jsonify({'message': '用户不存在，请重新登录'}), 401
 
-    borrow_record = BorrowRecord.query.get_or_404(record_id)
+    try:
+        borrow_record = BorrowRecord.query.get_or_404(record_id)
 
-    if borrow_record.user_id != current_user_id and not current_user.is_admin:
-        return jsonify({'message': '您没有权限归还此图书'}), 403
+        if borrow_record.user_id != current_user_id and not current_user.is_admin:
+            return jsonify({'message': '您没有权限归还此图书'}), 403
 
-    if borrow_record.status == 'returned':
-        return jsonify({'message': '该图书已归还'}), 400
+        if borrow_record.status == 'returned':
+            return jsonify({'message': '该图书已归还'}), 400
 
-    borrow_record.status = 'returned'
-    borrow_record.return_date = datetime.utcnow()
+        book = Book.query.get(borrow_record.book_id)
+        if not book:
+            return jsonify({'message': '关联图书不存在'}), 404
 
-    book = Book.query.get(borrow_record.book_id)
-    book.available_copies += 1
+        borrow_record.status = 'returned'
+        borrow_record.return_date = datetime.utcnow()
 
-    db.session.commit()
+        book.available_copies += 1
 
-    return jsonify({'message': '归还成功', 'borrow_record': borrow_record.to_dict()}), 200
+        if book.available_copies > book.total_copies:
+            book.available_copies = book.total_copies
+
+        db.session.commit()
+
+        return jsonify({
+            'message': '归还成功',
+            'borrow_record': borrow_record.to_dict()
+        }), 200
+
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f'归还数据库错误: {str(e)}')
+        return jsonify({'message': '归还失败，请稍后重试'}), 500
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'归还未知错误: {str(e)}')
+        return jsonify({'message': '归还失败，请稍后重试'}), 500
 
 
 @app.route('/api/borrow-records', methods=['GET'])
 @jwt_required()
 def get_borrow_records():
     current_user_id = get_jwt_identity()
+    
     current_user = User.query.get(current_user_id)
+    if not current_user:
+        return jsonify({'message': '用户不存在，请重新登录'}), 401
 
-    if current_user.is_admin:
-        records = BorrowRecord.query.order_by(BorrowRecord.borrow_date.desc()).all()
-    else:
-        records = BorrowRecord.query.filter_by(user_id=current_user_id).order_by(
-            BorrowRecord.borrow_date.desc()
-        ).all()
+    status = request.args.get('status')
+    
+    try:
+        query = BorrowRecord.query
+        
+        if current_user.is_admin:
+            if status:
+                query = query.filter_by(status=status)
+            records = query.order_by(BorrowRecord.borrow_date.desc()).all()
+        else:
+            query = query.filter_by(user_id=current_user_id)
+            if status:
+                query = query.filter_by(status=status)
+            records = query.order_by(BorrowRecord.borrow_date.desc()).all()
 
-    return jsonify([record.to_dict() for record in records]), 200
+        return jsonify([record.to_dict() for record in records]), 200
+
+    except SQLAlchemyError as e:
+        app.logger.error(f'查询借阅记录数据库错误: {str(e)}')
+        return jsonify({'message': '查询失败，请稍后重试'}), 500
+    except Exception as e:
+        app.logger.error(f'查询借阅记录未知错误: {str(e)}')
+        return jsonify({'message': '查询失败，请稍后重试'}), 500
 
 
 @app.route('/api/current-user', methods=['GET'])
 @jwt_required()
 def get_current_user():
     current_user_id = get_jwt_identity()
+    
     current_user = User.query.get(current_user_id)
+    if not current_user:
+        return jsonify({'message': '用户不存在，请重新登录'}), 401
+
     return jsonify(current_user.to_dict()), 200
 
 
