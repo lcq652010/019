@@ -4,6 +4,7 @@ import Books from '../views/Books.vue'
 import Borrow from '../views/Borrow.vue'
 import Records from '../views/Records.vue'
 import Layout from '../components/Layout.vue'
+import store from '../store'
 
 const routes = [
   {
@@ -44,11 +45,9 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
-  
-  if (to.meta.requiresAuth && !token) {
+  if (to.meta.requiresAuth && !store.state.isLoggedIn) {
     next('/login')
-  } else if (to.path === '/login' && token) {
+  } else if (to.path === '/login' && store.state.isLoggedIn) {
     next('/books')
   } else {
     next()

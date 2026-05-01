@@ -42,32 +42,23 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { borrowApi } from '../api'
+import store from '../store'
 
 const loading = ref(false)
 const borrowRecords = ref([])
 
-const user = computed(() => {
-  const savedUser = localStorage.getItem('user')
-  return savedUser ? JSON.parse(savedUser) : {}
-})
-
-const isAdmin = computed(() => user.value.is_admin)
+const isAdmin = computed(() => store.isAdmin())
 
 const fetchBorrowRecords = async () => {
   loading.value = true
-  const token = localStorage.getItem('token')
   try {
-    const response = await fetch('/api/borrow-records', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    const data = await response.json()
-    if (response.ok) {
-      borrowRecords.value = data
+    const response = await borrowApi.getBorrowRecords()
+    if (response.status === 200) {
+      borrowRecords.value = response.data
     }
   } catch (error) {
-    ElMessage.error('获取借阅记录失败')
+    console.error('获取借阅记录失败:', error)
   } finally {
     loading.value = false
   }
@@ -79,25 +70,14 @@ const handleReturn = (row) => {
     cancelButtonText: '取消',
     type: 'info'
   }).then(async () => {
-    const token = localStorage.getItem('token')
     try {
-      const response = await fetch(`/api/return/${row.id}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
+      const response = await borrowApi.returnBook(row.id)
+      if (response.status === 200) {
         ElMessage.success('归还成功')
         fetchBorrowRecords()
-      } else {
-        ElMessage.error(data.message || '归还失败')
       }
     } catch (error) {
-      ElMessage.error('网络错误')
+      console.error('归还失败:', error)
     }
   }).catch(() => {})
 }

@@ -93,6 +93,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { bookApi } from '../api'
+import store from '../store'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -101,12 +103,7 @@ const isEdit = ref(false)
 const bookFormRef = ref(null)
 const books = ref([])
 
-const user = computed(() => {
-  const savedUser = localStorage.getItem('user')
-  return savedUser ? JSON.parse(savedUser) : {}
-})
-
-const isAdmin = computed(() => user.value.is_admin)
+const isAdmin = computed(() => store.isAdmin())
 
 const bookForm = reactive({
   id: null,
@@ -134,19 +131,13 @@ const bookRules = {
 
 const fetchBooks = async () => {
   loading.value = true
-  const token = localStorage.getItem('token')
   try {
-    const response = await fetch('/api/books', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    const data = await response.json()
-    if (response.ok) {
-      books.value = data
+    const response = await bookApi.getBooks()
+    if (response.status === 200) {
+      books.value = response.data
     }
   } catch (error) {
-    ElMessage.error('获取图书列表失败')
+    console.error('获取图书列表失败:', error)
   } finally {
     loading.value = false
   }
@@ -180,23 +171,14 @@ const handleDelete = (row) => {
     cancelButtonText: '取消',
     type: 'warning'
   }).then(async () => {
-    const token = localStorage.getItem('token')
     try {
-      const response = await fetch(`/api/books/${row.id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      const data = await response.json()
-      if (response.ok) {
+      const response = await bookApi.deleteBook(row.id)
+      if (response.status === 200) {
         ElMessage.success('删除成功')
         fetchBooks()
-      } else {
-        ElMessage.error(data.message || '删除失败')
       }
     } catch (error) {
-      ElMessage.error('网络错误')
+      console.error('删除失败:', error)
     }
   }).catch(() => {})
 }
@@ -207,32 +189,35 @@ const handleSubmit = async () => {
   await bookFormRef.value.validate(async (valid) => {
     if (valid) {
       submitLoading.value = true
-      const token = localStorage.getItem('token')
       
       try {
-        const url = isEdit.value ? `/api/books/${bookForm.id}` : '/api/books'
-        const method = isEdit.value ? 'PUT' : 'POST'
+        let response
         
-        const response = await fetch(url, {
-          method: method,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(bookForm)
-        })
+        if (isEdit.value) {
+          response = await bookApi.updateBook(bookForm.id, {
+            title: bookForm.title,
+            author: bookForm.author,
+            isbn: bookForm.isbn,
+            description: bookForm.description,
+            total_copies: bookForm.total_copies
+          })
+        } else {
+          response = await bookApi.createBook({
+            title: bookForm.title,
+            author: bookForm.author,
+            isbn: bookForm.isbn,
+            description: bookForm.description,
+            total_copies: bookForm.total_copies
+          })
+        }
         
-        const data = await response.json()
-        
-        if (response.ok) {
+        if (response.status === 200 || response.status === 201) {
           ElMessage.success(isEdit.value ? '更新成功' : '添加成功')
           dialogVisible.value = false
           fetchBooks()
-        } else {
-          ElMessage.error(data.message || '操作失败')
         }
       } catch (error) {
-        ElMessage.error('网络错误')
+        console.error('操作失败:', error)
       } finally {
         submitLoading.value = false
       }
@@ -246,27 +231,14 @@ const handleBorrow = async (row) => {
     cancelButtonText: '取消',
     type: 'info'
   }).then(async () => {
-    const token = localStorage.getItem('token')
     try {
-      const response = await fetch('/api/borrow', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ book_id: row.id })
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
+      const response = await bookApi.borrowBook(row.id)
+      if (response.status === 200 || response.status === 201) {
         ElMessage.success('借阅成功')
         fetchBooks()
-      } else {
-        ElMessage.error(data.message || '借阅失败')
       }
     } catch (error) {
-      ElMessage.error('网络错误')
+      console.error('借阅失败:', error)
     }
   }).catch(() => {})
 }

@@ -108,6 +108,8 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
+import { authApi } from '../api'
+import store from '../store'
 
 const router = useRouter()
 
@@ -168,26 +170,20 @@ const handleLogin = async () => {
     if (valid) {
       loading.value = true
       try {
-        const response = await fetch('/api/login', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(loginForm)
+        const response = await authApi.login({
+          username: loginForm.username,
+          password: loginForm.password
         })
         
-        const data = await response.json()
+        const data = response.data
         
-        if (response.ok) {
-          localStorage.setItem('token', data.access_token)
-          localStorage.setItem('user', JSON.stringify(data.user))
+        if (response.status === 200) {
+          store.login(data.user, data.access_token)
           ElMessage.success('登录成功')
           router.push('/books')
-        } else {
-          ElMessage.error(data.message || '登录失败')
         }
       } catch (error) {
-        ElMessage.error('网络错误，请稍后重试')
+        console.error('登录失败:', error)
       } finally {
         loading.value = false
       }
@@ -202,30 +198,20 @@ const handleRegister = async () => {
     if (valid) {
       loading.value = true
       try {
-        const response = await fetch('/api/register', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            username: registerForm.username,
-            password: registerForm.password
-          })
+        const response = await authApi.register({
+          username: registerForm.username,
+          password: registerForm.password
         })
         
-        const data = await response.json()
-        
-        if (response.ok) {
+        if (response.status === 200 || response.status === 201) {
           ElMessage.success('注册成功，请登录')
           activeTab.value = 'login'
           loginForm.username = registerForm.username
           loginForm.password = registerForm.password
           registerFormRef.value.resetFields()
-        } else {
-          ElMessage.error(data.message || '注册失败')
         }
       } catch (error) {
-        ElMessage.error('网络错误，请稍后重试')
+        console.error('注册失败:', error)
       } finally {
         loading.value = false
       }

@@ -47,32 +47,23 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Book, Reading, Goods, Document, SwitchButton } from '@element-plus/icons-vue'
+import store from '../store'
+import { authApi } from '../api'
 
 const router = useRouter()
 const route = useRoute()
 
-const user = ref({
-  id: null,
-  username: '',
-  is_admin: false
-})
+const user = computed(() => store.state.user)
 
 const activeMenu = computed(() => {
   return route.path
 })
 
 const fetchCurrentUser = async () => {
-  const token = localStorage.getItem('token')
   try {
-    const response = await fetch('/api/current-user', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    const data = await response.json()
-    if (response.ok) {
-      user.value = data
-      localStorage.setItem('user', JSON.stringify(data))
+    const response = await authApi.getCurrentUser()
+    if (response.status === 200) {
+      store.updateUser(response.data)
     }
   } catch (error) {
     console.error('获取用户信息失败:', error)
@@ -89,19 +80,16 @@ const handleLogout = () => {
     cancelButtonText: '取消',
     type: 'warning'
   }).then(() => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    store.logout()
     ElMessage.success('已退出登录')
     router.push('/login')
   }).catch(() => {})
 }
 
 onMounted(() => {
-  const savedUser = localStorage.getItem('user')
-  if (savedUser) {
-    user.value = JSON.parse(savedUser)
+  if (store.state.isLoggedIn) {
+    fetchCurrentUser()
   }
-  fetchCurrentUser()
 })
 </script>
 
